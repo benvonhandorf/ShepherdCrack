@@ -1,22 +1,22 @@
 import sigrokdecode as srd
 
+class RadioState:
+  txPower = 0
+  txByteCount = 0
+  txBuffer = []
+
+  ss = 0
+  es = 0
+
+  register = 0
+
+  resetPhase = 0
 
 class Decoder(srd.Decoder):
-  class RadioState:
-    txPower = 0
-    txByteCount = 0
-    txBuffer = []
-
-    ss = 0
-    es = 0
-
-    register = 0
-
-    resetPhase = 0
-
   api_version = 2
   id = 'em9201'
   name = 'EM9201 SPI'
+  longname = 'EM9201 SPI'
   desc = 'Commands and data sent to EM9201 RF module used in Hallmark wireless ornaments'
   license = 'gplv2+'
   inputs = ['spi']
