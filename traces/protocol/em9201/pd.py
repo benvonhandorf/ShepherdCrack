@@ -21,15 +21,16 @@ class Decoder(srd.Decoder):
   license = 'gplv2+'
   inputs = ['spi']
   outputs = ['em9201-tx', 'em9201-rx', 'em9201-cfg']
+  channels = ()
+  optional_channels = ()
   annotations = (
     ('tx', 'Transmitted data'),
     ('rx', 'Received data'),
     ('cfg', 'Config changes'),
   )
 
-  radioState = RadioState()
-
   def start(self):
+    self.radioState = RadioState()
     self.out_ann = self.register(srd.OUTPUT_ANN)
 
 
@@ -39,21 +40,24 @@ class Decoder(srd.Decoder):
     if ptype != 'DATA':
       return
 
-    if radioState.register == 0:
+    if self.radioState.register == 0:
       # New command starting
-      radioState.ss = ss
-      radioState.register = mosi
-      print("Register : {0}".format(radioState.register))
-    elif radioState.register == 0x1A:
-      if radioState.resetPhase == 1 and mosi == 0x5E:
-        self.put(radioState.ss, radioState.es, self.out_ann, [2,['Reset', 'RST', 'R']])
-        radioState.es = es
-        radioState.resetPhase = 0
-      elif mosi == 0xB3:
-        radioState.resetPhase = 1
-      else:
-        radioState.resetPhase = 0
+      self.radioState.ss = ss
+      self.radioState.register = mosi
     else:
-      #A command we didn't comprehend yet has completed.  Reset the state of the decoder
-      print("Register : {0} - Data : {1}".format(radioState.register, mosi))
-      radioState.register = 0
+      if self.radioState.register == 0x1A:
+        if self.radioState.resetPhase == 1 and mosi == 0x5E:
+          print("RST")
+          self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Reset', 'RST', 'R']])
+          self.radioState.es = es
+          self.radioState.resetPhase = 0
+        elif mosi == 0xB3:
+          self.radioState.resetPhase = 1
+        else:
+          self.radioState.resetPhase = 0
+      elif self.radioState.register == 0x00:
+        self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
+      elif self.radioState.register == 0x01:
+        self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
+      
+      self.radioState.register = 0
