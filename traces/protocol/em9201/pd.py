@@ -4,6 +4,7 @@ class RadioState:
   txPower = 0
   txByteCount = 0
   txBuffer = []
+  rxBuffer = []
 
   ss = 0
   es = 0
@@ -58,6 +59,11 @@ class Decoder(srd.Decoder):
       elif self.radioState.register == 0x00:
         self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
       elif self.radioState.register == 0x01:
-        self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
-      
+        self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 1', 'CS1', 'C']])
+      elif self.radioState.register in range(0x40, 0x5F):
+        offset = self.radioState.register - 0x40
+        self.radioState.txBuffer[offset] = mosi
+      elif self.radioState.register in range(0x60, 0x7F):
+        offset = self.radioState.register - 0x60
+        self.radioState.rxBuffer[offset] = mosi
       self.radioState.register = 0
