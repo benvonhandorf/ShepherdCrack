@@ -3,13 +3,13 @@ import sigrokdecode as srd
 class RadioState:
   txPower = 0
   txByteCount = 0
-  txBuffer = []
-  rxBuffer = []
+  txBuffer = [0x00] * 32
+  rxBuffer = [0x00] * 32
 
   ss = 0
   es = 0
 
-  register = 0
+  register = -1
 
   resetPhase = 0
 
@@ -41,7 +41,7 @@ class Decoder(srd.Decoder):
     if ptype != 'DATA':
       return
 
-    if self.radioState.register == 0:
+    if self.radioState.register == -1:
       # New command starting
       self.radioState.ss = ss
       self.radioState.register = mosi
@@ -49,7 +49,7 @@ class Decoder(srd.Decoder):
       if self.radioState.register == 0x1A:
         if self.radioState.resetPhase == 1 and mosi == 0x5E:
           print("RST")
-          self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Reset', 'RST', 'R']])
+          self.put(self.radioState.ss, es, self.out_ann, [2,['Reset', 'RST', 'R']])
           self.radioState.es = es
           self.radioState.resetPhase = 0
         elif mosi == 0xB3:
@@ -57,13 +57,25 @@ class Decoder(srd.Decoder):
         else:
           self.radioState.resetPhase = 0
       elif self.radioState.register == 0x00:
-        self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
+        self.put(self.radioState.ss, es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
       elif self.radioState.register == 0x01:
-        self.put(self.radioState.ss, self.radioState.es, self.out_ann, [2,['Clear Status 1', 'CS1', 'C']])
-      elif self.radioState.register in range(0x40, 0x5F):
+        self.put(self.radioState.ss, es, self.out_ann, [2,['Clear Status 1', 'CS1', 'C']])
+      elif self.radioState.register == 0x14:
+        self.radioState.txByteCount = mosi
+        self.put(self.radioState.ss, es, self.out_ann, [2,['Tx Size set {0}'.format(self.radioState.txByteCount), 'TX Len {0}'.format(self.radioState.txByteCount)]])
+      elif self.radioState.register == 0x04:
+
+        if(mosi == 0x07):
+          txBytes = ""
+
+          for i in range(0, self.radioState.txByteCount):
+            txBytes += "{:02X} ".format(self.radioState.txBuffer[i])
+
+          self.put(self.radioState.ss, es, self.out_ann, [0, ["TX: {0}".format(txBytes), txBytes]])
+      elif 0x40 <= self.radioState.register <= 0x5F:
         offset = self.radioState.register - 0x40
         self.radioState.txBuffer[offset] = mosi
-      elif self.radioState.register in range(0x60, 0x7F):
+      elif 0x60 <= self.radioState.register <= 0x7F:
         offset = self.radioState.register - 0x60
         self.radioState.rxBuffer[offset] = mosi
-      self.radioState.register = 0
+      self.radioState.register = -1
