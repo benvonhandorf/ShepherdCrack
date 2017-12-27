@@ -6,3 +6,5 @@ IRQ = 5
 MISO = 3
 MOSI = 1
 CLK = 0
+
+Traces become unreliable to decode at less than 1MHz sampling rate

@@ -1,4 +1,5 @@
 import sigrokdecode as srd
+import math
 
 class RadioState:
   txPower = 0
@@ -15,6 +16,8 @@ class RadioState:
 
   ss = 0
   es = 0
+
+  lastCommandSample = 0
 
   register = -1
 
@@ -47,8 +50,10 @@ class Decoder(srd.Decoder):
 
     for i in range(0, self.radioState.rxByteCount):
       dat = self.radioState.rxBuffer.get(i)
-      if dat is not None:
-        rxBytes += "{}: {:02X} ".format(i, dat)
+      if dat is None:
+        rxBytes += "XX "
+      else:
+        rxBytes += "{:02X} ".format(dat)
 
     self.put(self.radioState.rxSS, self.radioState.rxES, self.out_ann, [1, ["RX: {0}".format(rxBytes), rxBytes]])
 
@@ -58,9 +63,9 @@ class Decoder(srd.Decoder):
     for i in range(0, self.radioState.txByteCount):
       dat = self.radioState.txBuffer.get(i)
       if dat is None:
-        txBytes += "{}: XX ".format(i)
+        txBytes += "XX "
       else:
-        txBytes += "{}: {:02X} ".format(i, dat)
+        txBytes += "{:02X} ".format(dat)
 
     self.put(ss, es, self.out_ann, [0, ["TX {} bytes: {}".format(self.radioState.txByteCount, txBytes), txBytes]])
 
@@ -76,37 +81,43 @@ class Decoder(srd.Decoder):
       self.radioState.register = mosi & 0x7F
       self.radioState.isRead = mosi & 0x80
     else:
-      if self.radioState.isRead:
-        self.put(self.radioState.ss, es, self.out_ann, [3,['readRegister(0x{:02X}); // Expect 0x{:02X} - {} to {}'.format(self.radioState.register, miso, self.radioState.ss, es)]])
-      else:
-        self.put(self.radioState.ss, es, self.out_ann, [3,['writeRegister(0x{:02X}, 0x{:02X}); // {} to {}'.format(self.radioState.register, mosi, self.radioState.ss, es)]])
+      desc = "Unknown"
 
       if self.radioState.register == 0x1A:
         if self.radioState.resetPhase == 1 and mosi == 0x5E:
           self.put(self.radioState.ss, es, self.out_ann, [2,['Reset', 'RST', 'R']])
           self.radioState.es = es
           self.radioState.resetPhase = 0
+
+          desc = "RST Phase 2"
         elif mosi == 0xB3:
           self.radioState.resetPhase = 1
+          desc = "RST Phase 1"
         else:
           self.radioState.resetPhase = 0
       elif self.radioState.register == 0x00:
         self.put(self.radioState.ss, es, self.out_ann, [2,['Clear Status 0', 'CS0', 'C']])
+        desc = "CS0"
       elif self.radioState.register == 0x01:
         self.put(self.radioState.ss, es, self.out_ann, [2,['Clear Status 1', 'CS1', 'C']])
+        desc = "CS1"
       elif self.radioState.register == 0x02:
         self.put(self.radioState.ss, es, self.out_ann, [2,['Int1Msk {:02X}'.format(mosi), 'Int1Msk']])
+        desc = "Int1Msk"
       elif self.radioState.register == 0x03:
         self.put(self.radioState.ss, es, self.out_ann, [2,['Int2Msk {:02X}'.format(mosi), 'Int2Msk']])
+        desc = "Int2Msk"
       elif self.radioState.register == 0x04:
 
         if(mosi == 0x07):
           self.dumpTransmit(ss, es)
+          desc = "TX"
         elif mosi == 0x02:
           self.put(self.radioState.ss, es, self.out_ann, [2,['RX Enabled'.format(mosi), 'RX']])  
           self.radioState.rxByteCount = 0
           self.radioState.rxBytesRead = 0
           self.radioState.rxBuffer = {}
+          desc = "RX Enable"
         elif mosi == 0x00:
           self.put(self.radioState.ss, es, self.out_ann, [2,['Radio Stop', 'RDO-OFF']])  
           if self.radioState.rxBytesRead > 0:
@@ -115,20 +126,26 @@ class Decoder(srd.Decoder):
           self.radioState.rxByteCount = 0
           self.radioState.rxBytesRead = 0
           self.radioState.rxBuffer = {}
+          desc = "RDO-OFF"
       elif self.radioState.register == 0x06:
         self.put(self.radioState.ss, es, self.out_ann, [2,['Power Config {:02X}'.format(mosi), 'PWR-CFG']])
 
+        desc = "PWR-CFG"
       elif self.radioState.register == 0x06:
         self.put(self.radioState.ss, es, self.out_ann, [2,['RF Config {:02X}'.format(mosi), 'RFC']])
 
         if mosi | 0x40 == 0x40:
           self.put(self.radioState.ss, es, self.out_ann, [2,['PLL Autoconfig Start', 'PLL']])
+          desc = "PLL Autoconfig Start"
+        else:
+          desc = "RF Config"
 
         power = mosi & 0x07
         self.put(self.radioState.ss, es, self.out_ann, [2,['Power {0}'.format(power), 'PWR']])
       elif self.radioState.register == 0x07:
         self.put(self.radioState.ss, es, self.out_ann, [2,['RF Channel {}'.format(mosi), 'CHAN']])
 
+        desc = "Channel Selection"
       elif self.radioState.register == 0x0B:
         if mosi | 0x10 == 0x10:
           self.put(self.radioState.ss, es, self.out_ann, [2,['ACK Enabled', 'ACK-ON']])
@@ -137,6 +154,7 @@ class Decoder(srd.Decoder):
 
         power = mosi & 0x07
         self.put(self.radioState.ss, es, self.out_ann, [2,['Power {0}'.format(power), 'PWR']])
+        desc = "RC Ack Config"
       elif 0x0E <= self.radioState.register <= 0x10:
         offset = self.radioState.register - 0x0E
         self.radioState.address[offset] = mosi
@@ -146,6 +164,8 @@ class Decoder(srd.Decoder):
             addr += "{:02X} ".format(self.radioState.address[i])
 
         self.put(self.radioState.ss, es, self.out_ann, [2,['Address: {}'.format(addr), 'ADDR']])
+
+        desc = "ADDR"
 
       elif 0x11 <= self.radioState.register <= 0x13:
         offset = self.radioState.register - 0x11
@@ -157,16 +177,26 @@ class Decoder(srd.Decoder):
 
         self.put(self.radioState.ss, es, self.out_ann, [2,['Peer Address: {}'.format(addr), 'PEER']])
 
+        desc = "PEER"
+
       elif self.radioState.register == 0x14:
-        self.radioState.txByteCount = mosi
+        self.radioState.txByteCount = mosi & 0x0F
         self.put(self.radioState.ss, es, self.out_ann, [2,['Tx Size set {0}'.format(self.radioState.txByteCount), 'TX Len {0}'.format(self.radioState.txByteCount)]])
+
+        desc = "TX Length"
       elif self.radioState.register == 0x16:
         self.put(self.radioState.ss, es, self.out_ann, [2,['FIFO Config {:02X}'.format(mosi), 'FIFO']])
+
+        desc = "FIFO CTRL"
 
       elif 0x40 <= self.radioState.register <= 0x5F:
         offset = self.radioState.register - 0x40
         self.radioState.txBuffer[offset] = mosi
+
+        desc = "TX Buffer"
       elif 0x60 <= self.radioState.register <= 0x7F:
+        desc = "RX Buffer"
+
         offset = self.radioState.register - 0x60
         if self.radioState.isRead:
           incrementCounter = True
@@ -174,23 +204,12 @@ class Decoder(srd.Decoder):
           self.radioState.rxBuffer[offset] = miso
           if self.radioState.register == 0x60:
             if self.radioState.rxBytesRead == 0:
+              #First byte appears to be read first but 60 is also read multiple times, so gate this on
+              #if we've already RXed any bytes
+
               self.put(self.radioState.ss, es, self.out_ann, [2,['RX Read Begin', 'RX-START']])
             else:
               incrementCounter = False
-            #First byte appears to be read first but 60 is also read multiple times, so gate this on
-            #if we've already RXed any bytes
-              
-              # if miso == 0x02:
-              #   self.radioState.rxByteCount = 7
-              # elif miso == 0x03:
-              #   self.radioState.rxByteCount = 6
-              # elif miso == 0x04:
-              #   self.radioState.rxByteCount = 5
-              # elif miso == 0x05:
-              #   self.radioState.rxByteCount = 5
-              # else:
-              #   self.put(self.radioState.ss, es, self.out_ann, [2,['RX UNEXPECTED BYTE {:02X}'.format(miso), 'RX-ERR']])
-              #   self.radioState.rxByteCount = 6
 
               self.radioState.rxSS = ss
 
@@ -207,6 +226,20 @@ class Decoder(srd.Decoder):
       elif self.radioState.register == 0x81:
         if miso == 0x03:
           self.put(self.radioState.ss, es, self.out_ann, [2,['PLL Complete'.format(power), 'PLL-END']])
+          desc = "PLL-END"
+        else:
+          desc = "PLL-POLL"
       else:
         self.put(self.radioState.ss, es, self.out_ann, [2,['Unknown Register 0x{:02X} = 0x{:02X}'.format(self.radioState.register, mosi), 'UNK']])
+
+      if es - self.radioState.lastCommandSample > 10000:
+        delay = math.floor((es - self.radioState.lastCommandSample) / 1000)
+        self.put(self.radioState.ss, es, self.out_ann, [3,['delay({}); // Delay {} cycles'.format(delay, es - self.radioState.lastCommandSample)]])
+
+      if self.radioState.isRead:
+        self.put(self.radioState.ss, es, self.out_ann, [3,['result = readRegister(0x{:02X}); // {} - Expect 0x{:02X} - {} to {}'.format(self.radioState.register, desc, miso, self.radioState.ss, es)]])
+      else:
+        self.put(self.radioState.ss, es, self.out_ann, [3,['writeRegister(0x{:02X}, 0x{:02X}); // {} - {} to {}'.format(self.radioState.register, mosi, desc, self.radioState.ss, es)]])
+      self.radioState.lastCommandSample = es
+
       self.radioState.register = -1
